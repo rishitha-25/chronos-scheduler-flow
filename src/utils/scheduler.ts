@@ -58,9 +58,16 @@ export const scheduleSRTN = (
 
   // Main scheduling loop
   while (jobs.filter(job => job.remainingTime! > 0).length > 0 || runningJobs.some(job => job !== null)) {
+    // Track which jobs are currently assigned to CPUs to prevent duplicates
+    const assignedJobIds = runningJobs
+      .filter(job => job !== null)
+      .map(job => job!.id);
+
     // Add newly arrived jobs to the ready queue
     const readyQueue = jobs.filter(
-      job => job.arrivalTime <= currentTime && job.remainingTime! > 0
+      job => job.arrivalTime <= currentTime && 
+             job.remainingTime! > 0 && 
+             !assignedJobIds.includes(job.id) // Exclude jobs already running
     );
     
     // Sort ready queue by remaining time (shortest first)
@@ -113,36 +120,76 @@ export const scheduleSRTN = (
                             (schedulingMethod === "quantum" && currentTime >= quantumEndTime);
 
       if (isCPUAvailable && readyQueue.length > 0) {
-        // Get job with shortest remaining time
-        const nextJob = readyQueue.shift();
-        if (!nextJob) continue;
-        
-        // If this is the first time this job is running, set its start time
-        if (nextJob.startTime === undefined) {
-          nextJob.startTime = currentTime;
+        // Find the first job not already running on another CPU
+        let nextJobIndex = 0;
+        while (
+          nextJobIndex < readyQueue.length && 
+          runningJobs.some(job => job !== null && job.id === readyQueue[nextJobIndex].id)
+        ) {
+          nextJobIndex++;
         }
-        
-        let processingEndTime;
-        if (schedulingMethod === "quantum") {
-          // Processing ends either at end of job or end of quantum, whichever comes first
-          const jobEndTime = currentTime + nextJob.remainingTime!;
-          processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
-        } else {
-          // For endTime scheduling, job runs until completion
-          processingEndTime = currentTime + nextJob.remainingTime!;
+
+        // If we found an available job, schedule it
+        if (nextJobIndex < readyQueue.length) {
+          const nextJob = readyQueue.splice(nextJobIndex, 1)[0];
+          
+          // If this is the first time this job is running, set its start time
+          if (nextJob.startTime === undefined) {
+            nextJob.startTime = currentTime;
+          }
+          
+          let processingEndTime;
+          if (schedulingMethod === "quantum") {
+            // Processing ends either at end of job or end of quantum, whichever comes first
+            const jobEndTime = currentTime + nextJob.remainingTime!;
+            processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
+          } else {
+            // For endTime scheduling, job runs until completion
+            processingEndTime = currentTime + nextJob.remainingTime!;
+          }
+          
+          jobEndTimes[i] = processingEndTime;
+          runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
+          
+          timeline.push({
+            cpuId: i,
+            jobId: nextJob.id,
+            jobName: nextJob.name,
+            startTime: currentTime,
+            endTime: processingEndTime,
+            isIdle: false
+          });
+        } else if (readyQueue.length === 0) {
+          // If no unassigned jobs are available, CPU is idle
+          const nextJobArrival = Math.min(
+            ...jobs
+              .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
+              .map(job => job.arrivalTime),
+            Infinity
+          );
+          
+          const nextCPUEvent = Math.min(
+            ...jobEndTimes.filter(time => time > currentTime),
+            schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+          );
+          
+          const nextTimePoint = Math.min(
+            isFinite(nextJobArrival) ? nextJobArrival : Infinity,
+            isFinite(nextCPUEvent) ? nextCPUEvent : Infinity
+          );
+          
+          if (isFinite(nextTimePoint) && nextTimePoint > currentTime) {
+            timeline.push({
+              cpuId: i,
+              jobId: null,
+              jobName: null,
+              startTime: currentTime,
+              endTime: nextTimePoint,
+              isIdle: true
+            });
+            jobEndTimes[i] = nextTimePoint;
+          }
         }
-        
-        jobEndTimes[i] = processingEndTime;
-        runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
-        
-        timeline.push({
-          cpuId: i,
-          jobId: nextJob.id,
-          jobName: nextJob.name,
-          startTime: currentTime,
-          endTime: processingEndTime,
-          isIdle: false
-        });
       } else if (runningJobs[i] === null) {
         // CPU is idle
         const nextJobArrival = Math.min(
@@ -280,12 +327,17 @@ export const scheduleRoundRobin = (
          runningJobs.some(job => job !== null) || 
          readyQueue.length > 0) {
     
+    // Track which jobs are currently assigned to CPUs
+    const assignedJobIds = runningJobs
+      .filter(job => job !== null)
+      .map(job => job!.id);
+    
     // 1. Add newly arrived jobs to the ready queue
     const newArrivals = jobs.filter(
       job => job.arrivalTime <= currentTime && 
              job.remainingTime! > 0 && 
              !readyQueue.some(queuedJob => queuedJob.id === job.id) && 
-             !runningJobs.some(runningJob => runningJob && runningJob.id === job.id)
+             !assignedJobIds.includes(job.id)
     );
     
     readyQueue.push(...newArrivals);
@@ -327,35 +379,76 @@ export const scheduleRoundRobin = (
                             (schedulingMethod === "quantum" && currentTime >= nextQuantumStartTimes[i]);
       
       if (isCPUAvailable && readyQueue.length > 0) {
-        // Get next job from the front of the queue (FIFO)
-        const nextJob = readyQueue.shift()!;
-        
-        // If this is the first time this job is running, set its start time
-        if (nextJob.startTime === undefined) {
-          nextJob.startTime = currentTime;
+        // Find a job that's not currently running on another CPU
+        let nextJobIndex = 0;
+        while (
+          nextJobIndex < readyQueue.length && 
+          runningJobs.some(job => job !== null && job.id === readyQueue[nextJobIndex].id)
+        ) {
+          nextJobIndex++;
         }
-        
-        let processingEndTime;
-        if (schedulingMethod === "quantum") {
-          // Processing ends either at end of job or end of quantum, whichever comes first
-          const jobEndTime = currentTime + nextJob.remainingTime!;
-          processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
-        } else {
-          // For endTime scheduling, job runs until completion
-          processingEndTime = currentTime + nextJob.remainingTime!;
+
+        // If we found an available job, assign it
+        if (nextJobIndex < readyQueue.length) {
+          const nextJob = readyQueue.splice(nextJobIndex, 1)[0];
+          
+          // If this is the first time this job is running, set its start time
+          if (nextJob.startTime === undefined) {
+            nextJob.startTime = currentTime;
+          }
+          
+          let processingEndTime;
+          if (schedulingMethod === "quantum") {
+            // Processing ends either at end of job or end of quantum, whichever comes first
+            const jobEndTime = currentTime + nextJob.remainingTime!;
+            processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
+          } else {
+            // For endTime scheduling, job runs until completion
+            processingEndTime = currentTime + nextJob.remainingTime!;
+          }
+          
+          jobEndTimes[i] = processingEndTime;
+          runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
+          
+          timeline.push({
+            cpuId: i,
+            jobId: nextJob.id,
+            jobName: nextJob.name,
+            startTime: currentTime,
+            endTime: processingEndTime,
+            isIdle: false
+          });
+        } else if (readyQueue.length === 0) {
+          // CPU is idle - schedule next time point
+          const nextJobArrival = Math.min(
+            ...jobs
+              .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
+              .map(job => job.arrivalTime),
+            Infinity
+          );
+          
+          const nextCPUEvent = Math.min(
+            ...jobEndTimes.filter(time => time > currentTime),
+            schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+          );
+          
+          const nextTimePoint = Math.min(
+            isFinite(nextJobArrival) ? nextJobArrival : Infinity,
+            isFinite(nextCPUEvent) ? nextCPUEvent : Infinity
+          );
+          
+          if (isFinite(nextTimePoint) && nextTimePoint > currentTime) {
+            timeline.push({
+              cpuId: i,
+              jobId: null,
+              jobName: null,
+              startTime: currentTime,
+              endTime: nextTimePoint,
+              isIdle: true
+            });
+            jobEndTimes[i] = nextTimePoint;
+          }
         }
-        
-        jobEndTimes[i] = processingEndTime;
-        runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
-        
-        timeline.push({
-          cpuId: i,
-          jobId: nextJob.id,
-          jobName: nextJob.name,
-          startTime: currentTime,
-          endTime: processingEndTime,
-          isIdle: false
-        });
       } else if (runningJobs[i] === null) {
         // CPU is idle - schedule next time point
         const nextJobArrival = Math.min(
@@ -464,4 +557,3 @@ export const scheduleRoundRobin = (
     jobColors: assignJobColors(inputJobs)
   };
 };
-

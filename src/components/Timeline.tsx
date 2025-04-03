@@ -53,7 +53,7 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
     <div>
       <h3 className="text-lg font-medium mb-3">Timeline</h3>
       <div className="space-y-4">
-        {Array.from({ length: numCPUs }, (_, i) => i).map((cpuId) => (
+        {numCPUs > 0 && Array.from({ length: numCPUs }, (_, i) => i).map((cpuId) => (
           <div key={cpuId} className="space-y-1">
             <div className="text-sm font-medium">CPU {cpuId + 1}</div>
             <div className="relative h-10 bg-gray-100 rounded">
@@ -99,4 +99,3 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
 };
 
 export default Timeline;
-
