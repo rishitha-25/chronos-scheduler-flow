@@ -14,14 +14,13 @@ const Index = () => {
   const [numCPUs, setNumCPUs] = useState<number>(1);
   const [quantum, setQuantum] = useState<number>(2);
   const [algorithm, setAlgorithm] = useState<"srtn" | "roundRobin">("srtn");
-  const [schedulingMethod, setSchedulingMethod] = useState<"endTime" | "quantum">("endTime");
   const [results, setResults] = useState<SchedulingResult | null>(null);
 
   const handleSchedule = () => {
     if (jobs.length === 0) return;
 
     const schedulingFunction = algorithm === "srtn" ? scheduleSRTN : scheduleRoundRobin;
-    const result = schedulingFunction(jobs, numCPUs, quantum, schedulingMethod);
+    const result = schedulingFunction(jobs, numCPUs, quantum);
     setResults(result);
   };
 
@@ -51,8 +50,6 @@ const Index = () => {
               setQuantum={setQuantum}
               algorithm={algorithm}
               setAlgorithm={setAlgorithm}
-              schedulingMethod={schedulingMethod}
-              setSchedulingMethod={setSchedulingMethod}
               onAddJob={addJob}
               onSchedule={handleSchedule}
               jobCount={jobs.length}

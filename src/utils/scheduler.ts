@@ -1,5 +1,5 @@
 
-import { Job, SchedulingResult, SchedulingMethod, TimelineEvent, QueueState } from "@/types/scheduler";
+import { Job, SchedulingResult, TimelineEvent, QueueState } from "@/types/scheduler";
 
 // Define colors for jobs
 const jobColors = [
@@ -27,8 +27,7 @@ const assignJobColors = (jobs: Job[]): Record<string, string> => {
 export const scheduleSRTN = (
   inputJobs: Job[],
   numCPUs: number,
-  quantum: number,
-  schedulingMethod: SchedulingMethod
+  quantum: number
 ): SchedulingResult => {
   // Create a deep copy of input jobs to avoid modifying the original
   const jobs = inputJobs.map(job => ({
@@ -45,20 +44,20 @@ export const scheduleSRTN = (
   let currentTime = 0;
   let runningJobs = Array(numCPUs).fill(null);
   let jobEndTimes = Array(numCPUs).fill(0);
-  let nextQuantumStartTimes = Array(numCPUs).fill(0);
+  let nextQuantumEndTimes = Array(numCPUs).fill(0);
   
   // Find the earliest arrival time to start processing
   const earliestArrival = Math.min(...jobs.map(job => job.arrivalTime));
   currentTime = earliestArrival;
   
-  // Initialize quantum start times
+  // Initialize quantum end times
   for (let i = 0; i < numCPUs; i++) {
-    nextQuantumStartTimes[i] = currentTime;
+    nextQuantumEndTimes[i] = currentTime + quantum;
   }
 
   // Main scheduling loop
   while (jobs.filter(job => job.remainingTime! > 0).length > 0 || runningJobs.some(job => job !== null)) {
-    // Track which jobs are currently assigned to CPUs to prevent duplicates
+    // Track which jobs are currently assigned to any CPU to prevent the same job running on multiple CPUs
     const assignedJobIds = runningJobs
       .filter(job => job !== null)
       .map(job => job!.id);
@@ -67,7 +66,7 @@ export const scheduleSRTN = (
     const readyQueue = jobs.filter(
       job => job.arrivalTime <= currentTime && 
              job.remainingTime! > 0 && 
-             !assignedJobIds.includes(job.id) // Exclude jobs already running
+             !assignedJobIds.includes(job.id) // Exclude jobs already running on any CPU
     );
     
     // Sort ready queue by remaining time (shortest first)
@@ -83,48 +82,30 @@ export const scheduleSRTN = (
       }))
     });
     
-    // For quantum-based scheduling, check if we need to reassign jobs
-    if (schedulingMethod === "quantum") {
-      for (let i = 0; i < numCPUs; i++) {
-        if (currentTime >= nextQuantumStartTimes[i]) {
-          // Mark current job as completed for this quantum
-          if (runningJobs[i] !== null) {
-            const job = jobs.find(j => j.id === runningJobs[i]!.id);
-            if (job && job.remainingTime! > 0) {
-              // If job is not completed but quantum is over, update job end time
-              const lastEvent = timeline.find(event => 
-                event.cpuId === i && event.jobId === job.id && event.endTime === currentTime
-              );
-              
-              if (lastEvent) {
-                // Job was running and quantum ended
-                runningJobs[i] = null;
-              }
-            }
+    // Check each CPU for quantum end or job completion
+    for (let i = 0; i < numCPUs; i++) {
+      if (currentTime >= nextQuantumEndTimes[i]) {
+        // If quantum ended, preempt the job if it's still running
+        if (runningJobs[i] !== null) {
+          const job = jobs.find(j => j.id === runningJobs[i]!.id);
+          if (job && job.remainingTime! > 0) {
+            // Job was preempted - it will go back to ready queue
+            runningJobs[i] = null;
           }
-          
-          // Schedule next quantum start time
-          nextQuantumStartTimes[i] = currentTime + quantum;
         }
       }
     }
     
     // Assign jobs to available CPUs
     for (let i = 0; i < numCPUs; i++) {
-      const quantumEndTime = nextQuantumStartTimes[i];
-
-      // CPU is available if:
-      // 1. No job is running OR
-      // 2. For quantum scheduling: current time is at quantum boundary
-      const isCPUAvailable = runningJobs[i] === null || 
-                            (schedulingMethod === "quantum" && currentTime >= quantumEndTime);
+      const isCPUAvailable = runningJobs[i] === null;
 
       if (isCPUAvailable && readyQueue.length > 0) {
         // Find the first job not already running on another CPU
         let nextJobIndex = 0;
         while (
           nextJobIndex < readyQueue.length && 
-          runningJobs.some(job => job !== null && job.id === readyQueue[nextJobIndex].id)
+          assignedJobIds.includes(readyQueue[nextJobIndex].id)
         ) {
           nextJobIndex++;
         }
@@ -138,15 +119,12 @@ export const scheduleSRTN = (
             nextJob.startTime = currentTime;
           }
           
-          let processingEndTime;
-          if (schedulingMethod === "quantum") {
-            // Processing ends either at end of job or end of quantum, whichever comes first
-            const jobEndTime = currentTime + nextJob.remainingTime!;
-            processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
-          } else {
-            // For endTime scheduling, job runs until completion
-            processingEndTime = currentTime + nextJob.remainingTime!;
-          }
+          // Set next quantum end time for this CPU
+          nextQuantumEndTimes[i] = currentTime + quantum;
+          
+          // Calculate when job will end - either at completion or at quantum end
+          const jobCompletionTime = currentTime + nextJob.remainingTime!;
+          const processingEndTime = Math.min(jobCompletionTime, nextQuantumEndTimes[i]);
           
           jobEndTimes[i] = processingEndTime;
           runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
@@ -160,7 +138,7 @@ export const scheduleSRTN = (
             isIdle: false
           });
         } else if (readyQueue.length === 0) {
-          // If no unassigned jobs are available, CPU is idle
+          // If no unassigned jobs are available, CPU is idle until next event
           const nextJobArrival = Math.min(
             ...jobs
               .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
@@ -170,7 +148,7 @@ export const scheduleSRTN = (
           
           const nextCPUEvent = Math.min(
             ...jobEndTimes.filter(time => time > currentTime),
-            schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+            Infinity
           );
           
           const nextTimePoint = Math.min(
@@ -191,7 +169,7 @@ export const scheduleSRTN = (
           }
         }
       } else if (runningJobs[i] === null) {
-        // CPU is idle
+        // CPU is idle, schedule next event
         const nextJobArrival = Math.min(
           ...jobs
             .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
@@ -201,7 +179,7 @@ export const scheduleSRTN = (
         
         const nextCPUEvent = Math.min(
           ...jobEndTimes.filter(time => time > currentTime),
-          schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+          Infinity
         );
         
         const nextTimePoint = Math.min(
@@ -242,32 +220,12 @@ export const scheduleSRTN = (
           
           completedJobs.push({ ...job });
           
-          // Important: Handle job completion differently based on scheduling method
-          if (schedulingMethod === "endTime") {
-            // For endTime scheduling, CPU is immediately available for next job
-            runningJobs[i] = null;
-          } else if (schedulingMethod === "quantum") {
-            // For quantum scheduling, if job completes before quantum ends,
-            // the CPU remains idle until the end of the quantum
-            if (nextCompletionTime < nextQuantumStartTimes[i]) {
-              timeline.push({
-                cpuId: i,
-                jobId: null,
-                jobName: null,
-                startTime: nextCompletionTime,
-                endTime: nextQuantumStartTimes[i],
-                isIdle: true
-              });
-              jobEndTimes[i] = nextQuantumStartTimes[i];
-              runningJobs[i] = null;
-            } else {
-              // If job completion coincides with quantum end, just mark CPU as available
-              runningJobs[i] = null;
-            }
-          }
+          // Mark CPU as available immediately when job completes
+          runningJobs[i] = null;
+          nextQuantumEndTimes[i] = nextCompletionTime;
         }
-        // For quantum scheduling, if job hasn't completed but quantum is over
-        else if (schedulingMethod === "quantum" && nextCompletionTime >= nextQuantumStartTimes[i]) {
+        // If job reaches quantum end but isn't complete, it will be preempted
+        else if (nextCompletionTime >= nextQuantumEndTimes[i]) {
           runningJobs[i] = null;
         }
       }
@@ -292,8 +250,7 @@ export const scheduleSRTN = (
 export const scheduleRoundRobin = (
   inputJobs: Job[],
   numCPUs: number,
-  quantum: number,
-  schedulingMethod: SchedulingMethod
+  quantum: number
 ): SchedulingResult => {
   // Create a deep copy of input jobs to avoid modifying the original
   const jobs = inputJobs.map(job => ({
@@ -311,7 +268,7 @@ export const scheduleRoundRobin = (
   let runningJobs = Array(numCPUs).fill(null);
   let jobEndTimes = Array(numCPUs).fill(0);
   let readyQueue: Job[] = [];
-  let nextQuantumStartTimes = Array(numCPUs).fill(0);
+  let nextQuantumEndTimes = Array(numCPUs).fill(0);
   
   // Find the earliest arrival time to start processing
   const earliestArrival = Math.min(...jobs.map(job => job.arrivalTime));
@@ -319,7 +276,7 @@ export const scheduleRoundRobin = (
   
   // Initialize quantum start times
   for (let i = 0; i < numCPUs; i++) {
-    nextQuantumStartTimes[i] = currentTime;
+    nextQuantumEndTimes[i] = currentTime + quantum;
   }
   
   // Main scheduling loop
@@ -342,23 +299,18 @@ export const scheduleRoundRobin = (
     
     readyQueue.push(...newArrivals);
     
-    // 2. For quantum-based scheduling, check if we need to reassign jobs at quantum boundaries
-    if (schedulingMethod === "quantum") {
-      for (let i = 0; i < numCPUs; i++) {
-        if (currentTime >= nextQuantumStartTimes[i]) {
-          // Mark current job as completed for this quantum
-          if (runningJobs[i] !== null) {
-            const job = jobs.find(j => j.id === runningJobs[i]!.id);
-            if (job && job.remainingTime! > 0) {
-              // Put job back in the queue if it still has remaining time
-              readyQueue.push({ ...job });
-            }
-            // Clear the running job
-            runningJobs[i] = null;
+    // 2. Check if any CPUs have reached the end of their quantum
+    for (let i = 0; i < numCPUs; i++) {
+      if (currentTime >= nextQuantumEndTimes[i]) {
+        // If quantum ended, preempt the job if it's still running
+        if (runningJobs[i] !== null) {
+          const job = jobs.find(j => j.id === runningJobs[i]!.id);
+          if (job && job.remainingTime! > 0) {
+            // Put job back in the queue if it still has remaining time
+            readyQueue.push({ ...job });
           }
-          
-          // Schedule next quantum start time
-          nextQuantumStartTimes[i] = currentTime + quantum;
+          // Clear the running job
+          runningJobs[i] = null;
         }
       }
     }
@@ -375,15 +327,14 @@ export const scheduleRoundRobin = (
     
     // 4. Assign jobs to available CPUs
     for (let i = 0; i < numCPUs; i++) {
-      const isCPUAvailable = runningJobs[i] === null || 
-                            (schedulingMethod === "quantum" && currentTime >= nextQuantumStartTimes[i]);
+      const isCPUAvailable = runningJobs[i] === null;
       
       if (isCPUAvailable && readyQueue.length > 0) {
         // Find a job that's not currently running on another CPU
         let nextJobIndex = 0;
         while (
           nextJobIndex < readyQueue.length && 
-          runningJobs.some(job => job !== null && job.id === readyQueue[nextJobIndex].id)
+          assignedJobIds.includes(readyQueue[nextJobIndex].id)
         ) {
           nextJobIndex++;
         }
@@ -397,15 +348,12 @@ export const scheduleRoundRobin = (
             nextJob.startTime = currentTime;
           }
           
-          let processingEndTime;
-          if (schedulingMethod === "quantum") {
-            // Processing ends either at end of job or end of quantum, whichever comes first
-            const jobEndTime = currentTime + nextJob.remainingTime!;
-            processingEndTime = Math.min(jobEndTime, nextQuantumStartTimes[i]);
-          } else {
-            // For endTime scheduling, job runs until completion
-            processingEndTime = currentTime + nextJob.remainingTime!;
-          }
+          // Set next quantum end time for this CPU
+          nextQuantumEndTimes[i] = currentTime + quantum;
+          
+          // Calculate when job will end - either at completion or at quantum end
+          const jobCompletionTime = currentTime + nextJob.remainingTime!;
+          const processingEndTime = Math.min(jobCompletionTime, nextQuantumEndTimes[i]);
           
           jobEndTimes[i] = processingEndTime;
           runningJobs[i] = { ...nextJob, endTimeForThisRun: processingEndTime };
@@ -429,7 +377,7 @@ export const scheduleRoundRobin = (
           
           const nextCPUEvent = Math.min(
             ...jobEndTimes.filter(time => time > currentTime),
-            schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+            Infinity
           );
           
           const nextTimePoint = Math.min(
@@ -460,7 +408,7 @@ export const scheduleRoundRobin = (
         
         const nextCPUEvent = Math.min(
           ...jobEndTimes.filter(time => time > currentTime),
-          schedulingMethod === "quantum" ? nextQuantumStartTimes[i] : Infinity
+          Infinity
         );
         
         const nextTimePoint = Math.min(
@@ -484,8 +432,7 @@ export const scheduleRoundRobin = (
     
     // 5. Determine next event time
     const nextEventTime = Math.min(
-      ...jobEndTimes.filter(time => time > currentTime),
-      ...nextQuantumStartTimes.filter(time => time > currentTime)
+      ...jobEndTimes.filter(time => time > currentTime)
     );
     
     // 6. Update job remaining times and handle completed jobs
@@ -505,40 +452,11 @@ export const scheduleRoundRobin = (
           
           completedJobs.push({ ...job });
           
-          // For endTime scheduling, CPU is immediately available for next job
-          if (schedulingMethod === "endTime") {
-            runningJobs[i] = null;
-          }
-          // For quantum scheduling, if job completes before quantum ends,
-          // the CPU remains idle until the end of the quantum
-          else if (schedulingMethod === "quantum") {
-            if (job.endTime < nextQuantumStartTimes[i]) {
-              timeline.push({
-                cpuId: i,
-                jobId: null,
-                jobName: null,
-                startTime: job.endTime,
-                endTime: nextQuantumStartTimes[i],
-                isIdle: true
-              });
-              jobEndTimes[i] = nextQuantumStartTimes[i];
-              runningJobs[i] = null;
-            } else {
-              // If job completion coincides with quantum end, just mark CPU as available
-              runningJobs[i] = null;
-            }
-          }
+          // Mark CPU as available immediately when job completes
+          runningJobs[i] = null;
+          nextQuantumEndTimes[i] = job.endTime;
         }
-        // For endTime scheduling, if job finishes before next event
-        else if (schedulingMethod === "endTime" && job.remainingTime! > 0 && 
-                 currentTime + timeProcessed === nextEventTime) {
-          // Keep job running
-        }
-        // For quantum scheduling, if quantum ends before job completion
-        else if (schedulingMethod === "quantum" && 
-                 nextEventTime === nextQuantumStartTimes[i]) {
-          // Job will be put back in queue at the beginning of the loop
-        }
+        // If job reaches quantum end but isn't complete, it will be preempted in the next iteration
       }
     }
     

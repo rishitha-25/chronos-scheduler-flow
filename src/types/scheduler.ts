@@ -36,5 +36,3 @@ export interface SchedulingResult {
   maxTime: number;
   jobColors: Record<string, string>;
 }
-
-export type SchedulingMethod = "endTime" | "quantum";
