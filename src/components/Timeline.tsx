@@ -13,15 +13,18 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
   // Group timeline events by CPU
   const timelineByCP: Record<number, TimelineEvent[]> = {};
   
-  timelineData.forEach((event) => {
-    if (!timelineByCP[event.cpuId]) {
-      timelineByCP[event.cpuId] = [];
-    }
-    timelineByCP[event.cpuId].push(event);
-  });
+  // Ensure we're processing the timeline data
+  if (timelineData && timelineData.length > 0) {
+    timelineData.forEach((event) => {
+      if (!timelineByCP[event.cpuId]) {
+        timelineByCP[event.cpuId] = [];
+      }
+      timelineByCP[event.cpuId].push(event);
+    });
+  }
 
   // Check if maxTime is valid to prevent "Invalid array length" error
-  const safeMaxTime = maxTime > 0 && maxTime < 1000 ? maxTime : 0;
+  const safeMaxTime = maxTime > 0 && maxTime < 10000 ? maxTime : 0;
 
   // Determine the time step for markers based on the timeline length
   const getTimeSteps = () => {
@@ -50,12 +53,20 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
 
   const timeSteps = getTimeSteps();
 
+  // For debugging purposes
+  console.log("Timeline component received data:", { 
+    timelineData: timelineData?.length, 
+    maxTime, 
+    numCPUs, 
+    cpuTimelines: Object.keys(timelineByCP).length
+  });
+
   return (
     <div>
       <h3 className="text-lg font-medium mb-3">Timeline</h3>
       <ScrollArea className="w-full max-w-full">
         <div className="space-y-4 min-w-full pr-4">
-          {numCPUs > 0 && safeMaxTime > 0 ? (
+          {numCPUs > 0 && safeMaxTime > 0 && timelineData && timelineData.length > 0 ? (
             Array.from({ length: numCPUs }, (_, i) => i).map((cpuId) => (
               <div key={cpuId} className="space-y-1">
                 <div className="text-sm font-medium">CPU {cpuId + 1}</div>
