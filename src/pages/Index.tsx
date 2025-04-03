@@ -55,6 +55,7 @@ const Index = () => {
               setSchedulingMethod={setSchedulingMethod}
               onAddJob={addJob}
               onSchedule={handleSchedule}
+              jobCount={jobs.length}
             />
           </CardContent>
         </Card>
