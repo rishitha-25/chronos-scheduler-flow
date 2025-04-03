@@ -279,38 +279,34 @@ export const scheduleRoundRobin = (
   const timeline: TimelineEvent[] = [];
   const queueStates: QueueState[] = [];
   
-  let currentTime = 0;
-  let runningJobs = Array(numCPUs).fill(null);
-  let jobEndTimes = Array(numCPUs).fill(0);
-  let nextQuantumEndTimes = Array(numCPUs).fill(0);
-  
   // Find the earliest arrival time to start processing
   const earliestArrival = Math.min(...jobs.map(job => job.arrivalTime));
-  currentTime = earliestArrival;
+  let currentTime = earliestArrival;
+  
+  // Keep track of running jobs and their end times
+  let runningJobs = Array(numCPUs).fill(null);
+  let jobEndTimes = Array(numCPUs).fill(0);
+  
+  // A circular queue to maintain the round robin order
+  // Initially, the queue will only contain jobs that have arrived
+  let readyQueue: Job[] = [];
   
   // Track which CPU last executed each job (for continuity)
   const lastCPUForJob: Record<string, number> = {};
   
-  // Initialize quantum end times
-  for (let i = 0; i < numCPUs; i++) {
-    nextQuantumEndTimes[i] = currentTime + quantum;
-  }
-  
   // Main scheduling loop
-  while (jobs.filter(job => job.remainingTime! > 0).length > 0 || runningJobs.some(job => job !== null)) {
-    // Track which jobs are currently assigned to CPUs
-    const assignedJobIds = runningJobs
-      .filter(job => job !== null)
-      .map(job => job!.id);
-    
-    // Add newly arrived jobs to the ready queue
-    let readyQueue = jobs.filter(
+  while (jobs.filter(job => job.remainingTime! > 0).length > 0 || readyQueue.length > 0 || runningJobs.some(job => job !== null)) {
+    // Step 1: Add newly arrived jobs to the ready queue
+    const newArrivals = jobs.filter(
       job => job.arrivalTime <= currentTime && 
              job.remainingTime! > 0 && 
-             !assignedJobIds.includes(job.id)
+             !readyQueue.some(queuedJob => queuedJob.id === job.id) &&
+             !runningJobs.some(runningJob => runningJob && runningJob.id === job.id)
     );
     
-    // Update queue state
+    readyQueue = [...readyQueue, ...newArrivals];
+    
+    // Step 2: Record the current queue state
     queueStates.push({
       time: currentTime,
       jobs: readyQueue.map(job => ({
@@ -320,184 +316,196 @@ export const scheduleRoundRobin = (
       }))
     });
     
-    // Check each CPU for quantum end or job completion
+    // Step 3: Check if any running jobs have completed their quantum or finished
     for (let i = 0; i < numCPUs; i++) {
-      if (currentTime >= nextQuantumEndTimes[i]) {
-        // If quantum ended, preempt the job if it's still running
-        if (runningJobs[i] !== null) {
-          const job = jobs.find(j => j.id === runningJobs[i]!.id);
-          if (job && job.remainingTime! > 0) {
-            // Job was preempted - it will go back to ready queue
-            readyQueue.push({ ...job });
-            lastCPUForJob[job.id] = i; // Remember this job was on this CPU
+      if (runningJobs[i] !== null && currentTime >= jobEndTimes[i]) {
+        const runningJobId = runningJobs[i]!.id;
+        const job = jobs.find(j => j.id === runningJobId);
+        
+        if (job && job.remainingTime! > 0) {
+          // If job still has work remaining, put it back in the queue
+          readyQueue.push({ ...job });
+        }
+        
+        // Clear the CPU
+        runningJobs[i] = null;
+      }
+    }
+    
+    // Step 4: Assign jobs to available CPUs
+    const assignedJobIds = new Set<string>();
+    
+    // For the last remaining job, track which CPUs are currently idle
+    const isLastJob = jobs.filter(job => job.remainingTime! > 0).length === 1;
+    const idleCPUs: number[] = [];
+    
+    // First, check which CPUs are idle
+    for (let i = 0; i < numCPUs; i++) {
+      if (runningJobs[i] === null) {
+        idleCPUs.push(i);
+      }
+    }
+    
+    // If it's the last job, prefer to use the same CPU that ran it last
+    if (isLastJob && readyQueue.length === 1) {
+      const lastJob = readyQueue[0];
+      const preferredCPU = lastCPUForJob[lastJob.id];
+      
+      // If the preferred CPU is idle, use it
+      if (preferredCPU !== undefined && runningJobs[preferredCPU] === null) {
+        assignCPU(preferredCPU, lastJob);
+        readyQueue = [];
+      }
+      // Otherwise use any available CPU
+      else if (idleCPUs.length > 0) {
+        assignCPU(idleCPUs[0], lastJob);
+        readyQueue = [];
+      }
+    } else {
+      // Assign jobs to idle CPUs
+      for (let i = 0; i < numCPUs && readyQueue.length > 0; i++) {
+        if (runningJobs[i] === null) {
+          // Try to find a job that was last on this CPU for continuity
+          let foundJobIdx = -1;
+          
+          for (let j = 0; j < readyQueue.length; j++) {
+            if (!assignedJobIds.has(readyQueue[j].id) && lastCPUForJob[readyQueue[j].id] === i) {
+              foundJobIdx = j;
+              break;
+            }
           }
-          // Clear the running job
-          runningJobs[i] = null;
+          
+          // If no job with continuity is found, take the next one in queue
+          if (foundJobIdx === -1) {
+            foundJobIdx = readyQueue.findIndex(job => !assignedJobIds.has(job.id));
+          }
+          
+          if (foundJobIdx !== -1) {
+            const nextJob = readyQueue[foundJobIdx];
+            assignedJobIds.add(nextJob.id);
+            assignCPU(i, nextJob);
+            
+            // Remove the assigned job from the queue
+            readyQueue.splice(foundJobIdx, 1);
+          }
         }
       }
     }
     
-    // Assign jobs to available CPUs with continuity preference
+    function assignCPU(cpuId: number, job: Job) {
+      // If this is the first time this job is running, set its start time
+      if (job.startTime === undefined) {
+        job.startTime = currentTime;
+      }
+      
+      // Calculate how long this job will run
+      const timeToRun = Math.min(job.remainingTime!, quantum);
+      const nextEndTime = currentTime + timeToRun;
+      
+      // Assign the job to the CPU
+      runningJobs[cpuId] = { ...job };
+      jobEndTimes[cpuId] = nextEndTime;
+      lastCPUForJob[job.id] = cpuId;
+      
+      // Add to timeline
+      timeline.push({
+        cpuId: cpuId,
+        jobId: job.id,
+        jobName: job.name,
+        startTime: currentTime,
+        endTime: nextEndTime,
+        isIdle: false
+      });
+    }
+    
+    // Step 5: For any CPU still idle, fill with idle time until next event
+    const nextJobArrival = Math.min(
+      ...jobs
+        .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
+        .map(job => job.arrivalTime),
+      Infinity
+    );
+    
+    // Next time any CPU finishes its current job
+    const nextJobEnd = Math.min(
+      ...jobEndTimes.filter((time, i) => runningJobs[i] !== null && time > currentTime),
+      Infinity
+    );
+    
+    const nextEventTime = Math.min(
+      nextJobArrival,
+      nextJobEnd,
+      isFinite(nextJobEnd) ? nextJobEnd : Infinity
+    );
+    
     for (let i = 0; i < numCPUs; i++) {
-      if (runningJobs[i] === null && readyQueue.length > 0) {
-        // First try to assign a job that was last running on this CPU
-        const jobWithContinuity = readyQueue.findIndex(job => 
-          lastCPUForJob[job.id] === i && !assignedJobIds.includes(job.id)
-        );
-        
-        // For the last remaining job, prefer the CPU that was running it last
-        const lastRemainingJob = readyQueue.length === 1 && jobs.filter(job => job.remainingTime! > 0).length === 1;
-        let jobIndex = -1;
-        
-        if (lastRemainingJob && readyQueue[0] && lastCPUForJob[readyQueue[0].id] !== undefined) {
-          // If this is the last remaining job and this CPU previously ran it, assign it here
-          if (lastCPUForJob[readyQueue[0].id] === i) {
-            jobIndex = 0;
-          }
-        } else if (jobWithContinuity !== -1) {
-          // Normal continuity case
-          jobIndex = jobWithContinuity;
-        } else {
-          // Otherwise, just take the first available job
-          jobIndex = readyQueue.findIndex(job => !assignedJobIds.includes(job.id));
-        }
-        
-        if (jobIndex !== -1) {
-          const nextJob = readyQueue.splice(jobIndex, 1)[0];
-          
-          // If this is the first time this job is running, set its start time
-          if (nextJob.startTime === undefined) {
-            nextJob.startTime = currentTime;
-          }
-          
-          // Always use full quantum for each job
-          nextQuantumEndTimes[i] = currentTime + quantum;
-          
-          // Calculate when job will end - either at completion or at quantum end
-          const jobCompletionTime = currentTime + nextJob.remainingTime!;
-          const processingEndTime = Math.min(jobCompletionTime, nextQuantumEndTimes[i]);
-          
-          jobEndTimes[i] = processingEndTime;
-          runningJobs[i] = { ...nextJob };
-          lastCPUForJob[nextJob.id] = i; // Remember this job is on this CPU
-          
-          timeline.push({
-            cpuId: i,
-            jobId: nextJob.id,
-            jobName: nextJob.name,
-            startTime: currentTime,
-            endTime: processingEndTime,
-            isIdle: false
-          });
-        } else if (readyQueue.length === 0) {
-          // CPU is idle until the next event
-          const nextJobArrival = Math.min(
-            ...jobs
-              .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
-              .map(job => job.arrivalTime),
-            Infinity
-          );
-          
-          const nextCPUEvent = Math.min(
-            ...jobEndTimes.filter(time => time > currentTime),
-            Infinity
-          );
-          
-          const nextTimePoint = Math.min(
-            isFinite(nextJobArrival) ? nextJobArrival : Infinity,
-            isFinite(nextCPUEvent) ? nextCPUEvent : Infinity
-          );
-          
-          if (isFinite(nextTimePoint) && nextTimePoint > currentTime) {
-            timeline.push({
-              cpuId: i,
-              jobId: null,
-              jobName: null,
-              startTime: currentTime,
-              endTime: nextTimePoint,
-              isIdle: true
-            });
-            jobEndTimes[i] = nextTimePoint;
-          }
-        }
-      } else if (runningJobs[i] === null && readyQueue.length === 0) {
-        // CPU is idle until the next event
-        const nextJobArrival = Math.min(
-          ...jobs
-            .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
-            .map(job => job.arrivalTime),
-          Infinity
-        );
-        
-        const nextCPUEvent = Math.min(
-          ...jobEndTimes.filter(time => time > currentTime),
-          Infinity
-        );
-        
-        const nextTimePoint = Math.min(
-          isFinite(nextJobArrival) ? nextJobArrival : Infinity,
-          isFinite(nextCPUEvent) ? nextCPUEvent : Infinity
-        );
-        
-        if (isFinite(nextTimePoint) && nextTimePoint > currentTime) {
-          timeline.push({
-            cpuId: i,
-            jobId: null,
-            jobName: null,
-            startTime: currentTime,
-            endTime: nextTimePoint,
-            isIdle: true
-          });
-          jobEndTimes[i] = nextTimePoint;
-        }
+      if (runningJobs[i] === null && isFinite(nextEventTime) && nextEventTime > currentTime) {
+        // Add idle time to timeline
+        timeline.push({
+          cpuId: i,
+          jobId: null,
+          jobName: null,
+          startTime: currentTime,
+          endTime: nextEventTime,
+          isIdle: true
+        });
+        jobEndTimes[i] = nextEventTime;
       }
     }
     
-    // Determine next event time - the earliest time a job completes or a quantum ends
-    const nextCompletionTime = Math.min(...jobEndTimes.filter(time => time > currentTime));
+    // Step 6: Process time until next event
+    // Find the next time to process (the minimum end time of any job)
+    if (!isFinite(nextEventTime)) {
+      break; // No more events to process
+    }
     
-    // Update job remaining times and process completions
+    // Update job remaining times
     for (let i = 0; i < numCPUs; i++) {
       const runningJob = runningJobs[i];
       if (runningJob !== null) {
         const job = jobs.find(j => j.id === runningJob.id)!;
-        const timeProcessed = Math.min(nextCompletionTime - currentTime, job.remainingTime!);
+        const timeProcessed = nextEventTime - currentTime;
         job.remainingTime! -= timeProcessed;
         
-        // If job is finished
+        // Check if job completed
         if (job.remainingTime! <= 0) {
-          job.endTime = currentTime + timeProcessed;
+          job.endTime = nextEventTime;
           job.turnaroundTime = job.endTime - job.arrivalTime;
           job.waitingTime = job.turnaroundTime - job.burstTime;
           
           completedJobs.push({ ...job });
           
-          // Mark CPU as ready for next job
-          runningJobs[i] = null;
-          nextQuantumEndTimes[i] = job.endTime;
+          // Remove job from queue if it's there
+          const queueIdx = readyQueue.findIndex(qJob => qJob.id === job.id);
+          if (queueIdx !== -1) {
+            readyQueue.splice(queueIdx, 1);
+          }
         }
       }
     }
     
-    // Move time forward
-    currentTime = nextCompletionTime;
+    // Move time forward to the next event
+    currentTime = nextEventTime;
   }
   
   // Sort completed jobs by name for consistent display
   completedJobs.sort((a, b) => a.name.localeCompare(b.name));
   
-  // Add debug information to understand timeline data
+  // For debugging
   console.log("Round Robin Timeline data:", { 
     timelineLength: timeline.length,
     maxTime: Math.max(...timeline.map(event => event.endTime)),
     events: timeline.slice(0, 5) // Log first few events to check structure
   });
   
+  // Ensure we have a valid maxTime
+  const maxTime = Math.max(...timeline.map(event => Number.isFinite(event.endTime) ? event.endTime : 0));
+  
   return {
     completedJobs,
     timeline,
     queueStates,
-    maxTime: Math.max(...timeline.map(event => event.endTime)),
+    maxTime,
     jobColors: assignJobColors(inputJobs)
   };
 };

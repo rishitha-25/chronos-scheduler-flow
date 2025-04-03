@@ -13,18 +13,30 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
   // Group timeline events by CPU
   const timelineByCP: Record<number, TimelineEvent[]> = {};
   
+  // Handle potential infinity values and sanitize data
+  const sanitizedTimeline = timelineData?.filter(event => 
+    Number.isFinite(event.startTime) && 
+    Number.isFinite(event.endTime) &&
+    event.startTime !== null &&
+    event.endTime !== null
+  ) || [];
+  
+  // Calculate a safe maxTime - handle infinity or invalid values
+  const safeMaxTime = Number.isFinite(maxTime) && maxTime > 0 && maxTime < 10000 
+    ? maxTime 
+    : sanitizedTimeline.length > 0 
+      ? Math.max(...sanitizedTimeline.map(event => event.endTime))
+      : 0;
+  
   // Ensure we're processing the timeline data
-  if (timelineData && timelineData.length > 0) {
-    timelineData.forEach((event) => {
+  if (sanitizedTimeline.length > 0) {
+    sanitizedTimeline.forEach((event) => {
       if (!timelineByCP[event.cpuId]) {
         timelineByCP[event.cpuId] = [];
       }
       timelineByCP[event.cpuId].push(event);
     });
   }
-
-  // Check if maxTime is valid to prevent "Invalid array length" error
-  const safeMaxTime = maxTime > 0 && maxTime < 10000 ? maxTime : 0;
 
   // Determine the time step for markers based on the timeline length
   const getTimeSteps = () => {
@@ -55,8 +67,8 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
 
   // For debugging purposes
   console.log("Timeline component received data:", { 
-    timelineData: timelineData?.length, 
-    maxTime, 
+    timelineData: sanitizedTimeline?.length, 
+    maxTime: safeMaxTime, 
     numCPUs, 
     cpuTimelines: Object.keys(timelineByCP).length
   });
@@ -66,7 +78,7 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
       <h3 className="text-lg font-medium mb-3">Timeline</h3>
       <ScrollArea className="w-full max-w-full">
         <div className="space-y-4 min-w-full pr-4">
-          {numCPUs > 0 && safeMaxTime > 0 && timelineData && timelineData.length > 0 ? (
+          {numCPUs > 0 && safeMaxTime > 0 && sanitizedTimeline.length > 0 ? (
             Array.from({ length: numCPUs }, (_, i) => i).map((cpuId) => (
               <div key={cpuId} className="space-y-1">
                 <div className="text-sm font-medium">CPU {cpuId + 1}</div>
@@ -78,11 +90,11 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
                       style={{
                         left: `${(event.startTime / safeMaxTime) * 100}%`,
                         width: `${((event.endTime - event.startTime) / safeMaxTime) * 100}%`,
-                        backgroundColor: event.isIdle ? "#e5e7eb" : jobColors[event.jobId || ""],
+                        backgroundColor: event.isIdle ? "#e5e7eb" : jobColors[event.jobId || ""] || "#888",
                         color: event.isIdle ? "#6b7280" : "#fff",
                         borderLeft: index > 0 ? "1px solid white" : "none",
                       }}
-                      title={`${event.jobName || "Idle"}: ${event.startTime} - ${event.endTime}`}
+                      title={`${event.jobName || "Idle"}: ${event.startTime.toFixed(1)} - ${event.endTime.toFixed(1)}`}
                     >
                       {event.jobName || "Idle"}
                     </div>
