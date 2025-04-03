@@ -1,3 +1,4 @@
+
 import { Job, SchedulingResult, SchedulingMethod, TimelineEvent, QueueState } from "@/types/scheduler";
 
 // Define colors for jobs
@@ -147,7 +148,8 @@ export const scheduleSRTN = (
         const nextJobArrival = Math.min(
           ...jobs
             .filter(job => job.arrivalTime > currentTime && job.remainingTime! > 0)
-            .map(job => job.arrivalTime)
+            .map(job => job.arrivalTime),
+          Infinity
         );
         
         const nextCPUEvent = Math.min(
@@ -193,23 +195,28 @@ export const scheduleSRTN = (
           
           completedJobs.push({ ...job });
           
-          // If using endTime scheduling, free up the CPU
+          // Important: Handle job completion differently based on scheduling method
           if (schedulingMethod === "endTime") {
+            // For endTime scheduling, CPU is immediately available for next job
             runningJobs[i] = null;
-          }
-          // For quantum scheduling, job will be removed at quantum boundary
-          // but show idle time for remaining quantum
-          else if (schedulingMethod === "quantum" && nextCompletionTime < nextQuantumStartTimes[i]) {
-            timeline.push({
-              cpuId: i,
-              jobId: null,
-              jobName: null,
-              startTime: nextCompletionTime,
-              endTime: nextQuantumStartTimes[i],
-              isIdle: true
-            });
-            jobEndTimes[i] = nextQuantumStartTimes[i];
-            runningJobs[i] = null;
+          } else if (schedulingMethod === "quantum") {
+            // For quantum scheduling, if job completes before quantum ends,
+            // the CPU remains idle until the end of the quantum
+            if (nextCompletionTime < nextQuantumStartTimes[i]) {
+              timeline.push({
+                cpuId: i,
+                jobId: null,
+                jobName: null,
+                startTime: nextCompletionTime,
+                endTime: nextQuantumStartTimes[i],
+                isIdle: true
+              });
+              jobEndTimes[i] = nextQuantumStartTimes[i];
+              runningJobs[i] = null;
+            } else {
+              // If job completion coincides with quantum end, just mark CPU as available
+              runningJobs[i] = null;
+            }
           }
         }
         // For quantum scheduling, if job hasn't completed but quantum is over
@@ -405,22 +412,28 @@ export const scheduleRoundRobin = (
           
           completedJobs.push({ ...job });
           
-          // For endTime scheduling, free up CPU immediately
+          // For endTime scheduling, CPU is immediately available for next job
           if (schedulingMethod === "endTime") {
             runningJobs[i] = null;
           }
-          // For quantum scheduling, show idle time for remaining quantum
-          else if (schedulingMethod === "quantum" && job.endTime < nextQuantumStartTimes[i]) {
-            timeline.push({
-              cpuId: i,
-              jobId: null,
-              jobName: null,
-              startTime: job.endTime,
-              endTime: nextQuantumStartTimes[i],
-              isIdle: true
-            });
-            jobEndTimes[i] = nextQuantumStartTimes[i];
-            runningJobs[i] = null;
+          // For quantum scheduling, if job completes before quantum ends,
+          // the CPU remains idle until the end of the quantum
+          else if (schedulingMethod === "quantum") {
+            if (job.endTime < nextQuantumStartTimes[i]) {
+              timeline.push({
+                cpuId: i,
+                jobId: null,
+                jobName: null,
+                startTime: job.endTime,
+                endTime: nextQuantumStartTimes[i],
+                isIdle: true
+              });
+              jobEndTimes[i] = nextQuantumStartTimes[i];
+              runningJobs[i] = null;
+            } else {
+              // If job completion coincides with quantum end, just mark CPU as available
+              runningJobs[i] = null;
+            }
           }
         }
         // For endTime scheduling, if job finishes before next event
@@ -451,3 +464,4 @@ export const scheduleRoundRobin = (
     jobColors: assignJobColors(inputJobs)
   };
 };
+

@@ -1,10 +1,11 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Job } from "@/types/scheduler";
+import { Job, SchedulingMethod } from "@/types/scheduler";
+import { Separator } from "@/components/ui/separator";
 
 interface ConfigurationFormProps {
   numCPUs: number;
@@ -13,8 +14,8 @@ interface ConfigurationFormProps {
   setQuantum: (value: number) => void;
   algorithm: "srtn" | "roundRobin";
   setAlgorithm: (value: "srtn" | "roundRobin") => void;
-  schedulingMethod: "endTime" | "quantum";
-  setSchedulingMethod: (value: "endTime" | "quantum") => void;
+  schedulingMethod: SchedulingMethod;
+  setSchedulingMethod: (value: SchedulingMethod) => void;
   onAddJob: (job: Job) => void;
   onSchedule: () => void;
   jobCount: number;
@@ -31,28 +32,55 @@ const ConfigurationForm = ({
   setSchedulingMethod,
   onAddJob,
   onSchedule,
-  jobCount,
+  jobCount
 }: ConfigurationFormProps) => {
-  const [arrivalTime, setArrivalTime] = useState(0);
-  const [burstTime, setBurstTime] = useState(1);
+  const [arrivalTime, setArrivalTime] = useState<number>(0);
+  const [burstTime, setBurstTime] = useState<number>(1);
 
-  const handleAddJob = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Auto-generate job name (J1, J2, etc.)
-    const jobName = `J${jobCount + 1}`;
+  // Auto-name jobs as J1, J2, etc.
+  const nextJobName = `J${jobCount + 1}`;
+
+  const handleNumCPUsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value, 10);
+    if (value > 0) {
+      setNumCPUs(value);
+    }
+  };
+
+  const handleQuantumChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    if (value > 0) {
+      setQuantum(value);
+    }
+  };
+
+  const handleAddJob = () => {
+    if (burstTime <= 0) return;
     
     onAddJob({
-      id: "",
-      name: jobName,
+      id: "",  // Will be assigned on add
+      name: nextJobName,
       arrivalTime,
       burstTime,
-      remainingTime: burstTime,
     });
 
-    // Reset form
+    // Reset arrival time and burst time after adding a job
     setArrivalTime(0);
     setBurstTime(1);
+  };
+
+  const handleArrivalTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    if (value >= 0) {
+      setArrivalTime(value);
+    }
+  };
+
+  const handleBurstTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    if (value > 0) {
+      setBurstTime(value);
+    }
   };
 
   return (
@@ -65,7 +93,8 @@ const ConfigurationForm = ({
             type="number"
             min="1"
             value={numCPUs}
-            onChange={(e) => setNumCPUs(parseInt(e.target.value) || 1)}
+            onChange={handleNumCPUsChange}
+            className="mt-1"
           />
         </div>
         <div>
@@ -73,86 +102,94 @@ const ConfigurationForm = ({
           <Input
             id="quantum"
             type="number"
-            min="0.1"
             step="0.1"
+            min="0.1"
             value={quantum}
-            onChange={(e) => setQuantum(Number(e.target.value) || 1)}
+            onChange={handleQuantumChange}
+            className="mt-1"
           />
         </div>
       </div>
 
-      <div>
+      <div className="space-y-2">
         <Label>Algorithm</Label>
         <RadioGroup
           value={algorithm}
           onValueChange={(value) => setAlgorithm(value as "srtn" | "roundRobin")}
-          className="flex items-center space-x-4 pt-2"
+          className="flex space-x-4"
         >
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="srtn" id="srtn" />
-            <Label htmlFor="srtn" className="cursor-pointer">SRTN</Label>
+            <Label htmlFor="srtn">SRTN</Label>
           </div>
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="roundRobin" id="roundRobin" />
-            <Label htmlFor="roundRobin" className="cursor-pointer">Round Robin</Label>
+            <Label htmlFor="roundRobin">Round Robin</Label>
           </div>
         </RadioGroup>
       </div>
 
-      <div>
+      <div className="space-y-2">
         <Label>Scheduling Method</Label>
         <RadioGroup
           value={schedulingMethod}
-          onValueChange={(value) => setSchedulingMethod(value as "endTime" | "quantum")}
-          className="flex items-center space-x-4 pt-2"
+          onValueChange={(value) => setSchedulingMethod(value as SchedulingMethod)}
+          className="flex space-x-4"
         >
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="endTime" id="endTime" />
-            <Label htmlFor="endTime" className="cursor-pointer">By End Time</Label>
+            <Label htmlFor="endTime">By End Time</Label>
           </div>
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="quantum" id="quantum" />
-            <Label htmlFor="quantum" className="cursor-pointer">By Quantum</Label>
+            <Label htmlFor="quantum">By Quantum</Label>
           </div>
         </RadioGroup>
       </div>
 
-      <div className="border-t pt-4">
-        <h3 className="font-medium mb-2">Add New Job</h3>
-        <form onSubmit={handleAddJob} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="arrival-time">Arrival Time</Label>
-              <Input
-                id="arrival-time"
-                type="number"
-                min="0"
-                step="0.1"
-                value={arrivalTime}
-                onChange={(e) => setArrivalTime(Number(e.target.value) || 0)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="burst-time">Burst Time</Label>
-              <Input
-                id="burst-time"
-                type="number"
-                min="0.1"
-                step="0.1"
-                value={burstTime}
-                onChange={(e) => setBurstTime(Number(e.target.value) || 0.1)}
-              />
-            </div>
+      <Separator />
+
+      <div className="space-y-4">
+        <h3 className="font-medium">Add Job</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor="arrival-time">Arrival Time</Label>
+            <Input
+              id="arrival-time"
+              type="number"
+              step="0.1"
+              min="0"
+              value={arrivalTime}
+              onChange={handleArrivalTimeChange}
+              className="mt-1"
+            />
           </div>
-          <Button type="submit" className="w-full">Add Job</Button>
-        </form>
+          <div>
+            <Label htmlFor="burst-time">Burst Time</Label>
+            <Input
+              id="burst-time"
+              type="number"
+              step="0.1"
+              min="0.1"
+              value={burstTime}
+              onChange={handleBurstTimeChange}
+              className="mt-1"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={handleAddJob}>Add Job</Button>
+        </div>
       </div>
 
-      <Button onClick={onSchedule} variant="default" className="w-full">
-        Schedule Jobs
-      </Button>
+      <div className="pt-2">
+        <Button onClick={onSchedule} className="w-full" disabled={jobCount === 0}>
+          Schedule
+        </Button>
+      </div>
     </div>
   );
 };
 
 export default ConfigurationForm;
+

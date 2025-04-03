@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -27,6 +26,7 @@ const Index = () => {
   };
 
   const addJob = (job: Job) => {
+    // Keep the job name from the form (already formatted as J1, J2, etc.)
     setJobs([...jobs, { ...job, id: Date.now().toString() }]);
   };
 

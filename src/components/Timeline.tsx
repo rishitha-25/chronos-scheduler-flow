@@ -22,6 +22,33 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
   // Check if maxTime is valid to prevent "Invalid array length" error
   const safeMaxTime = maxTime > 0 && maxTime < 1000 ? maxTime : 0;
 
+  // Determine the time step for markers based on the timeline length
+  const getTimeSteps = () => {
+    if (safeMaxTime <= 0) return [];
+    
+    // For very short timelines, show more detailed markers
+    if (safeMaxTime <= 10) {
+      // For decimal times, show markers at appropriate intervals
+      const step = safeMaxTime <= 5 ? 0.5 : 1;
+      const steps = [];
+      for (let i = 0; i <= safeMaxTime; i += step) {
+        steps.push(Math.round(i * 10) / 10); // Round to nearest 0.1 to avoid floating point issues
+      }
+      return steps;
+    }
+    
+    // For longer timelines, show fewer markers
+    const markerCount = 20; // Target number of markers
+    const step = Math.ceil(safeMaxTime / markerCount);
+    const steps = [];
+    for (let i = 0; i <= safeMaxTime; i += step) {
+      steps.push(i);
+    }
+    return steps;
+  };
+
+  const timeSteps = getTimeSteps();
+
   return (
     <div>
       <h3 className="text-lg font-medium mb-3">Timeline</h3>
@@ -47,13 +74,8 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
               ))}
             </div>
             <div className="relative h-6">
-              {/* This is where the error was occurring */}
-              {safeMaxTime > 0 ? 
-                Array.from({ length: Math.min(safeMaxTime + 1, 100) }, (_, i) => 
-                  i * (safeMaxTime > 20 ? Math.ceil(safeMaxTime / 20) : 1)
-                )
-                .filter(time => time <= safeMaxTime)
-                .map((time) => (
+              {safeMaxTime > 0 ? (
+                timeSteps.map((time) => (
                   <div
                     key={time}
                     className="absolute text-xs text-gray-500"
@@ -65,7 +87,9 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
                     {time}
                   </div>
                 ))
-              : <div className="text-xs text-gray-500">No timeline data</div>}
+              ) : (
+                <div className="text-xs text-gray-500">No timeline data</div>
+              )}
             </div>
           </div>
         ))}
@@ -75,3 +99,4 @@ const Timeline = ({ timelineData, jobColors, maxTime, numCPUs }: TimelineProps) 
 };
 
 export default Timeline;
+
