@@ -1,4 +1,5 @@
 
+
 export interface Job {
   id: string;
   name: string;
@@ -37,4 +38,3 @@ export interface SchedulingResult {
   jobColors: Record<string, string>;
 }
 
-export type SchedulingMethod = "endTime" | "quantum";
