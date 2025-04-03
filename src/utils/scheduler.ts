@@ -96,13 +96,23 @@ export const scheduleSRTN = (
       }
     }
     
+    // Track which CPUs had which jobs (to maintain continuity when possible)
+    const lastJobByCP: Record<number, string | null> = {};
+    for (let i = 0; i < numCPUs; i++) {
+      lastJobByCP[i] = runningJobs[i] ? runningJobs[i]!.id : null;
+    }
+    
     // Assign jobs to available CPUs
     for (let i = 0; i < numCPUs; i++) {
       const isCPUAvailable = runningJobs[i] === null;
 
       if (isCPUAvailable && readyQueue.length > 0) {
+        // Check if any jobs in the ready queue were last on this CPU
+        const continuityJobIndex = readyQueue.findIndex(job => job.id === lastJobByCP[i]);
+        // If a job was previously on this CPU and is in the ready queue, prioritize it
+        let nextJobIndex = continuityJobIndex !== -1 ? continuityJobIndex : 0;
+        
         // Find the first job not already running on another CPU
-        let nextJobIndex = 0;
         while (
           nextJobIndex < readyQueue.length && 
           assignedJobIds.includes(readyQueue[nextJobIndex].id)
@@ -279,6 +289,12 @@ export const scheduleRoundRobin = (
     nextQuantumEndTimes[i] = currentTime + quantum;
   }
   
+  // Track last job executed on each CPU (for continuity)
+  const lastJobByCPU: Record<number, string | null> = {};
+  for (let i = 0; i < numCPUs; i++) {
+    lastJobByCPU[i] = null;
+  }
+  
   // Main scheduling loop
   while (jobs.filter(job => job.remainingTime! > 0).length > 0 || 
          runningJobs.some(job => job !== null) || 
@@ -308,6 +324,8 @@ export const scheduleRoundRobin = (
           if (job && job.remainingTime! > 0) {
             // Put job back in the queue if it still has remaining time
             readyQueue.push({ ...job });
+            // Save the job id for this CPU for continuity
+            lastJobByCPU[i] = job.id;
           }
           // Clear the running job
           runningJobs[i] = null;
@@ -330,8 +348,12 @@ export const scheduleRoundRobin = (
       const isCPUAvailable = runningJobs[i] === null;
       
       if (isCPUAvailable && readyQueue.length > 0) {
+        // First, check if the job that was just on this CPU is in the ready queue
+        const continuityJobIndex = readyQueue.findIndex(job => job.id === lastJobByCPU[i]);
+        const jobIndex = continuityJobIndex !== -1 ? continuityJobIndex : 0;
+        
         // Find a job that's not currently running on another CPU
-        let nextJobIndex = 0;
+        let nextJobIndex = jobIndex;
         while (
           nextJobIndex < readyQueue.length && 
           assignedJobIds.includes(readyQueue[nextJobIndex].id)
@@ -455,6 +477,7 @@ export const scheduleRoundRobin = (
           // Mark CPU as available immediately when job completes
           runningJobs[i] = null;
           nextQuantumEndTimes[i] = job.endTime;
+          lastJobByCPU[i] = null;
         }
         // If job reaches quantum end but isn't complete, it will be preempted in the next iteration
       }
