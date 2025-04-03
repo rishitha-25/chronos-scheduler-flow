@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Job } from "@/types/scheduler";
+import { Job, SchedulingMethod } from "@/types/scheduler";
 import { Separator } from "@/components/ui/separator";
 
 interface ConfigurationFormProps {
@@ -14,6 +14,8 @@ interface ConfigurationFormProps {
   setQuantum: (value: number) => void;
   algorithm: "srtn" | "roundRobin";
   setAlgorithm: (value: "srtn" | "roundRobin") => void;
+  schedulingMethod: SchedulingMethod;
+  setSchedulingMethod: (value: SchedulingMethod) => void;
   onAddJob: (job: Job) => void;
   onSchedule: () => void;
   jobCount: number;
@@ -26,6 +28,8 @@ const ConfigurationForm = ({
   setQuantum,
   algorithm,
   setAlgorithm,
+  schedulingMethod,
+  setSchedulingMethod,
   onAddJob,
   onSchedule,
   jobCount
@@ -125,6 +129,24 @@ const ConfigurationForm = ({
         </RadioGroup>
       </div>
 
+      <div className="space-y-2">
+        <Label>Scheduling Method</Label>
+        <RadioGroup
+          value={schedulingMethod}
+          onValueChange={(value) => setSchedulingMethod(value as SchedulingMethod)}
+          className="flex space-x-4"
+        >
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="endTime" id="endTime" />
+            <Label htmlFor="endTime">By End Time</Label>
+          </div>
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="quantum" id="quantum" />
+            <Label htmlFor="quantum">By Quantum</Label>
+          </div>
+        </RadioGroup>
+      </div>
+
       <Separator />
 
       <div className="space-y-4">
@@ -170,3 +192,4 @@ const ConfigurationForm = ({
 };
 
 export default ConfigurationForm;
+
